@@ -77,6 +77,24 @@ def backtest(panel: pd.DataFrame | None = None) -> pd.DataFrame:
     print("\n=== BACKTEST (out-of-sample) ===")
     print(f"metric={CFG.rank_metric}  test_days={results['analytic']['days']}")
     print(out.to_string(float_format=lambda x: f"{x:.3f}"))
+
+    # ---- pick the ranker to serve in `auto` mode ----
+    # primary metric: actual #1 inside our predicted top-3 (the practical target);
+    # tie-break prefers the more robust/transparent model so we don't chase noise.
+    from .model import save_best_model
+    preference = {"analytic": 0, "naive": 1, "lgbm": 2}  # lower = preferred on ties
+    best = sorted(
+        results.keys(),
+        key=lambda k: (-results[k]["actual1_in_pred3"], preference.get(k, 9)),
+    )[0]
+    save_best_model(best, {
+        "metric": CFG.rank_metric,
+        "actual1_in_pred3": round(results[best]["actual1_in_pred3"], 4),
+        "test_days": int(results[best]["days"]),
+    })
+    print(f"[backtest] auto-mode will serve: {best.upper()} "
+          f"(actual#1-in-top3={results[best]['actual1_in_pred3']:.2f} over "
+          f"{results[best]['days']} days)")
     return out
 
 

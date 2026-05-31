@@ -52,7 +52,15 @@ def dashboard():
 
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health():
+    active = CFG.model_mode
+    if CFG.model_mode == "auto":
+        try:
+            from .model import load_best_model
+            active = f"auto→{(load_best_model() or 'analytic')}"
+        except Exception:  # noqa
+            active = "auto→analytic"
     return {"ok": True, "metric": CFG.rank_metric, "model": CFG.model_mode,
+            "active_model": active,
             "time": datetime.now().isoformat(timespec="seconds")}
 
 

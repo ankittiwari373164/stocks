@@ -10,6 +10,8 @@ Two models, one interface.
    score if the model file is missing or lightgbm isn't installed.
 """
 from __future__ import annotations
+import json
+
 import numpy as np
 import pandas as pd
 
@@ -26,6 +28,29 @@ except Exception:
 def analytic_score(df: pd.DataFrame) -> np.ndarray:
     col = "proj_full_turnover" if CFG.rank_metric == "turnover" else "proj_full_vol"
     return df[col].fillna(0).to_numpy()
+
+
+def naive_score(df: pd.DataFrame) -> np.ndarray:
+    """Rank by raw opening turnover/volume — no share correction."""
+    col = "open_turnover" if CFG.rank_metric == "turnover" else "open_vol"
+    return df[col].fillna(0).to_numpy()
+
+
+def save_best_model(name: str, info: dict | None = None):
+    """Persist which ranker won the last backtest, so `auto` can serve it."""
+    payload = {"model": name}
+    if info:
+        payload.update(info)
+    CFG.best_model_path.write_text(json.dumps(payload, indent=2))
+
+
+def load_best_model() -> str | None:
+    if CFG.best_model_path.exists():
+        try:
+            return json.loads(CFG.best_model_path.read_text()).get("model")
+        except Exception:  # noqa
+            return None
+    return None
 
 
 def train_ranker(panel: pd.DataFrame, num_round: int = 400) -> "lgb.Booster | None":
@@ -80,18 +105,41 @@ def load_ranker() -> "lgb.Booster | None":
         return None
 
 
+def _lgbm_score(df: pd.DataFrame) -> np.ndarray | None:
+    booster = load_ranker()
+    if booster is None:
+        return None
+    return booster.predict(df[FEATURE_COLS].fillna(0), num_iteration=booster.best_iteration)
+
+
 def score(df: pd.DataFrame) -> np.ndarray:
-    """Return a ranking score per row, honouring MODEL_MODE."""
+    """Return a ranking score per row, honouring MODEL_MODE.
+
+    auto  -> serve whichever ranker won the most recent backtest
+             (falls back to analytic if no result is saved yet).
+    """
     mode = CFG.model_mode
+
+    if mode == "naive":
+        return naive_score(df)
     if mode == "analytic":
         return analytic_score(df)
-    if mode in ("auto", "lgbm"):
-        booster = load_ranker()
-        if booster is not None:
-            X = df[FEATURE_COLS].fillna(0)
-            return booster.predict(X, num_iteration=booster.best_iteration)
-        if mode == "lgbm":
-            print("[model] lgbm requested but no model file — using analytic")
+    if mode == "lgbm":
+        s = _lgbm_score(df)
+        if s is not None:
+            return s
+        print("[model] lgbm requested but no model file — using analytic")
+        return analytic_score(df)
+
+    # auto: use the backtest winner
+    best = load_best_model()
+    if best == "naive":
+        return naive_score(df)
+    if best == "lgbm":
+        s = _lgbm_score(df)
+        if s is not None:
+            return s
+    # default / analytic / no backtest yet
     return analytic_score(df)
 
 

@@ -67,5 +67,9 @@ class Config:
     def predictions_path(self) -> Path:
         return self.data_dir / "predictions.json"
 
+    @property
+    def best_model_path(self) -> Path:
+        return self.data_dir / "best_model.json"
+
 
 CFG = Config()
