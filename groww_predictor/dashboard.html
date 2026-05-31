@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Opening Bell — Most-Traded Predictor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0b0b0e; --panel:#141419; --panel-2:#1b1b22; --line:#26262f;
+    --ink:#ececf1; --muted:#8a8a99; --faint:#5a5a68;
+    --gold:#e8b04b; --gold-dim:#9a7530;
+    --up:#46d39a; --down:#ff6b6b;
+    --shadow:0 18px 50px -20px rgba(0,0,0,.8);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--ink);font-family:"Hanken Grotesk",sans-serif;-webkit-font-smoothing:antialiased}
+  body{
+    min-height:100vh;
+    background-image:
+      radial-gradient(900px 500px at 85% -10%, rgba(232,176,75,.10), transparent 60%),
+      radial-gradient(700px 400px at 0% 110%, rgba(70,211,154,.05), transparent 55%);
+  }
+  /* film grain */
+  body::after{content:"";position:fixed;inset:0;pointer-events:none;opacity:.035;z-index:99;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");}
+  .num{font-family:"JetBrains Mono",monospace;font-feature-settings:"tnum" 1}
+  .wrap{max-width:1120px;margin:0 auto;padding:28px 24px 80px}
+
+  /* header */
+  header{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:26px}
+  .brand{display:flex;align-items:baseline;gap:14px}
+  .brand .bell{font-family:"Fraunces";font-weight:900;font-size:13px;letter-spacing:.32em;color:var(--gold);text-transform:uppercase}
+  .brand h1{font-family:"Fraunces";font-weight:600;font-size:30px;letter-spacing:-.01em;line-height:1}
+  .brand h1 em{font-style:italic;color:var(--gold)}
+  .status{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+  .pill{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);background:var(--panel);border:1px solid var(--line);padding:7px 12px;border-radius:999px}
+  .pill b{color:var(--ink);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--faint);box-shadow:0 0 0 0 rgba(70,211,154,.5)}
+  .dot.live{background:var(--up);animation:pulse 2s infinite}
+  .dot.off{background:var(--down)}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(70,211,154,.45)}70%{box-shadow:0 0 0 7px rgba(70,211,154,0)}100%{box-shadow:0 0 0 0 rgba(70,211,154,0)}}
+  .clock{font-family:"JetBrains Mono";font-size:13px;color:var(--gold)}
+
+  /* hero */
+  .hero{background:linear-gradient(160deg,var(--panel),var(--panel-2));border:1px solid var(--line);border-radius:20px;
+    padding:30px 32px;box-shadow:var(--shadow);position:relative;overflow:hidden}
+  .hero::before{content:"";position:absolute;right:-40px;top:-60px;width:260px;height:260px;border-radius:50%;
+    background:radial-gradient(circle,rgba(232,176,75,.16),transparent 70%);}
+  .hero .label{font-size:11px;letter-spacing:.28em;text-transform:uppercase;color:var(--gold-dim);font-weight:700;margin-bottom:16px}
+  .heroGrid{display:grid;grid-template-columns:1.4fr 1fr;gap:28px;align-items:end}
+  @media(max-width:760px){.heroGrid{grid-template-columns:1fr;gap:22px}}
+  .pickName{font-family:"Fraunces";font-weight:900;font-size:clamp(46px,9vw,86px);line-height:.92;letter-spacing:-.02em}
+  .pickMeta{display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap}
+  .tag{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:4px 9px}
+  .pickLink{color:var(--gold);text-decoration:none;font-size:13px;border-bottom:1px dotted var(--gold-dim);padding-bottom:1px}
+  .stats{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .stat{background:rgba(0,0,0,.22);border:1px solid var(--line);border-radius:13px;padding:14px 15px}
+  .stat .k{font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin-bottom:7px}
+  .stat .v{font-family:"JetBrains Mono";font-size:22px;font-weight:500}
+  .stat .v small{font-size:12px;color:var(--muted)}
+  .conf{grid-column:1/-1}
+  .confBar{height:9px;border-radius:6px;background:rgba(0,0,0,.35);overflow:hidden;margin-top:4px}
+  .confBar > i{display:block;height:100%;border-radius:6px;background:linear-gradient(90deg,var(--gold-dim),var(--gold));width:0;transition:width 1s cubic-bezier(.2,.8,.2,1)}
+  .up{color:var(--up)} .down{color:var(--down)}
+
+  .actions{display:flex;gap:12px;align-items:center;margin:20px 0 30px;flex-wrap:wrap}
+  button.run{font-family:"Hanken Grotesk";font-weight:700;font-size:14px;letter-spacing:.02em;color:#1a1407;
+    background:linear-gradient(180deg,var(--gold),#c8923a);border:none;padding:13px 22px;border-radius:11px;cursor:pointer;
+    box-shadow:0 10px 24px -10px rgba(232,176,75,.7);transition:transform .12s,box-shadow .2s}
+  button.run:hover{transform:translateY(-1px)}
+  button.run:disabled{opacity:.55;cursor:wait;transform:none}
+  button.ghost{background:transparent;border:1px solid var(--line);color:var(--muted);padding:12px 18px;border-radius:11px;cursor:pointer;font-family:inherit;font-size:13px}
+  button.ghost:hover{color:var(--ink);border-color:var(--faint)}
+  .hint{font-size:12.5px;color:var(--faint)}
+
+  /* sections */
+  h2{font-family:"Fraunces";font-weight:600;font-size:19px;margin:34px 0 14px;letter-spacing:-.01em}
+  h2 span{color:var(--faint);font-family:"JetBrains Mono";font-size:12px;font-weight:400;margin-left:8px}
+
+  /* table */
+  .tableCard{background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+  table{width:100%;border-collapse:collapse}
+  th{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);text-align:left;padding:13px 16px;background:var(--panel-2);font-weight:600}
+  th.r,td.r{text-align:right}
+  td{padding:13px 16px;border-top:1px solid var(--line);font-size:14px}
+  tbody tr{transition:background .15s}
+  tbody tr:hover{background:var(--panel-2)}
+  tbody tr.lead td{background:rgba(232,176,75,.06)}
+  .rk{font-family:"JetBrains Mono";color:var(--faint);width:34px}
+  .rk.gold{color:var(--gold);font-weight:700}
+  .sym{font-weight:600}
+  .barCell{position:relative;min-width:150px}
+  .barCell .bar{position:absolute;left:16px;bottom:6px;height:4px;border-radius:3px;background:linear-gradient(90deg,var(--gold-dim),var(--gold));opacity:.85}
+
+  /* backtest */
+  .btGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  @media(max-width:680px){.btGrid{grid-template-columns:1fr}}
+  .btCard{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:18px}
+  .btCard.best{border-color:var(--gold-dim);box-shadow:inset 0 0 0 1px rgba(232,176,75,.25)}
+  .btCard h3{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:700;display:flex;justify-content:space-between}
+  .btCard h3 .best-badge{color:var(--gold);font-size:10px}
+  .btRow{display:flex;justify-content:space-between;align-items:baseline;margin-top:13px}
+  .btRow .k{font-size:12px;color:var(--faint)}
+  .btRow .v{font-family:"JetBrains Mono";font-size:20px;font-weight:500}
+
+  .empty{background:var(--panel);border:1px dashed var(--line);border-radius:16px;padding:34px;text-align:center;color:var(--muted)}
+  .empty b{color:var(--ink)} .empty code{font-family:"JetBrains Mono";color:var(--gold);background:rgba(0,0,0,.3);padding:2px 7px;border-radius:5px;font-size:12.5px}
+  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);background:var(--panel-2);border:1px solid var(--line);
+    color:var(--ink);padding:13px 20px;border-radius:12px;box-shadow:var(--shadow);opacity:0;transition:.3s;font-size:13.5px;z-index:200;max-width:90vw}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .toast.err{border-color:var(--down)}
+  footer{margin-top:40px;color:var(--faint);font-size:12px;line-height:1.7;border-top:1px solid var(--line);padding-top:18px}
+  .reveal{opacity:0;transform:translateY(10px);animation:rise .6s forwards}
+  @keyframes rise{to{opacity:1;transform:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <span class="bell">◆ Opening Bell</span>
+      <h1>Most&#8209;Traded <em>Predictor</em></h1>
+    </div>
+    <div class="status">
+      <span class="pill"><span id="hdot" class="dot"></span> <span id="hstatus">connecting…</span></span>
+      <span class="pill">metric <b id="hmetric">—</b></span>
+      <span class="pill">model <b id="hmodel">—</b></span>
+      <span class="clock num" id="clock">--:--:-- IST</span>
+    </div>
+  </header>
+
+  <main id="main">
+    <div id="heroSlot"></div>
+
+    <div class="actions reveal" style="animation-delay:.05s">
+      <button class="run" id="runBtn">▶ Run live prediction (09:25)</button>
+      <button class="ghost" id="refreshBtn">↻ Refresh</button>
+      <span class="hint" id="asOf"></span>
+    </div>
+
+    <h2>Predicted ranking <span id="rankCount"></span></h2>
+    <div id="tableSlot"></div>
+
+    <h2>Backtest accuracy <span>out&#8209;of&#8209;sample</span></h2>
+    <div id="btSlot"></div>
+  </main>
+
+  <footer>
+    Conditional projection from the 09:15–09:25 window via the Groww API — not investment advice.
+    Run <code>build_dataset</code> then <code>backtest</code> on your own data to see real accuracy.
+  </footer>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const API = (location.protocol === "file:") ? "http://localhost:8000" : "";
+const $ = s => document.querySelector(s);
+const fmtCr = v => (v==null||isNaN(v)) ? "—" : Number(v).toLocaleString("en-IN",{maximumFractionDigits:1});
+const pct = v => (v==null||isNaN(v)) ? "" : (v>=0?"+":"") + Number(v).toFixed(2) + "%";
+
+function toast(msg, err){const t=$("#toast");t.textContent=msg;t.className="toast show"+(err?" err":"");setTimeout(()=>t.className="toast",3600);}
+
+function tickClock(){
+  const ist=new Date(Date.now()+(new Date().getTimezoneOffset()*60000)+5.5*3600000);
+  $("#clock").textContent=ist.toTimeString().slice(0,8)+" IST";
+}
+setInterval(tickClock,1000);tickClock();
+
+async function getJSON(path,opts){const r=await fetch(API+path,opts);if(!r.ok)throw new Error("HTTP "+r.status);return r.json();}
+
+function renderHero(d){
+  const p=d&&d.most_traded_pick;
+  if(!p){
+    $("#heroSlot").innerHTML=`<div class="empty reveal"><p style="font-size:16px;margin-bottom:8px">No prediction yet.</p>
+      <p>Add your Groww credentials to <b>.env</b>, then click <b>Run live prediction</b> during market hours,
+      or run <code>python -m groww_predictor.predict_live</code> at 09:25 IST.</p></div>`;
+    $("#rankCount").textContent="";return;
+  }
+  const moveCls=p.open_ret_pct>=0?"up":"down";
+  $("#heroSlot").innerHTML=`
+   <div class="hero reveal">
+    <div class="label">Predicted most-traded stock today</div>
+    <div class="heroGrid">
+      <div>
+        <div class="pickName">${p.symbol}</div>
+        <div class="pickMeta">
+          <span class="tag">${d.metric||"turnover"}</span>
+          <span class="tag">${d.scanned||0} scanned</span>
+          <a class="pickLink" href="${p.groww_url}" target="_blank" rel="noopener">View on Groww ↗</a>
+        </div>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="k">Proj. full-day turnover</div><div class="v">₹${fmtCr(p.proj_full_turnover_cr)} <small>Cr</small></div></div>
+        <div class="stat"><div class="k">Opening turnover</div><div class="v">₹${fmtCr(p.open_turnover_cr)} <small>Cr</small></div></div>
+        <div class="stat"><div class="k">Opening move</div><div class="v ${moveCls}">${pct(p.open_ret_pct)}</div></div>
+        <div class="stat"><div class="k">Opening volume</div><div class="v">${fmtCr(p.open_vol)}</div></div>
+        <div class="stat conf"><div class="k">Confidence (separation of #1 from field)</div>
+          <div class="v">${(p.confidence_pct??0).toFixed(0)}<small>%</small></div>
+          <div class="confBar"><i id="confFill"></i></div></div>
+      </div>
+    </div>
+   </div>`;
+  requestAnimationFrame(()=>{const f=$("#confFill");if(f)f.style.width=Math.max(3,Math.min(100,p.confidence_pct||0))+"%";});
+  $("#asOf").textContent=d.as_of?("updated "+new Date(d.as_of).toLocaleString()):"";
+}
+
+function renderTable(d){
+  const rows=(d&&d.top)||[];
+  if(!rows.length){$("#tableSlot").innerHTML="";return;}
+  const max=Math.max(...rows.map(r=>r.proj_full_turnover_cr||0))||1;
+  $("#rankCount").textContent=`(top ${rows.length})`;
+  $("#tableSlot").innerHTML=`<div class="tableCard reveal"><table>
+    <thead><tr><th class="r">#</th><th>Symbol</th>
+      <th class="r">Open turnover</th><th class="r barCell">Proj. full-day</th>
+      <th class="r">Open move</th><th class="r">Score</th></tr></thead>
+    <tbody>${rows.map(r=>{
+      const w=Math.max(2,(r.proj_full_turnover_cr/max)*100);
+      const mc=r.open_ret_pct>=0?"up":"down";
+      return `<tr class="${r.rank===1?'lead':''}">
+        <td class="r rk ${r.rank===1?'gold':''}">${r.rank}</td>
+        <td class="sym">${r.symbol}</td>
+        <td class="r num">₹${fmtCr(r.open_turnover_cr)}</td>
+        <td class="r num barCell">₹${fmtCr(r.proj_full_turnover_cr)}<span class="bar" style="width:${w*1.1}px"></span></td>
+        <td class="r num ${mc}">${pct(r.open_ret_pct)}</td>
+        <td class="r num" style="color:var(--muted)">${(r.score??0).toFixed(2)}</td></tr>`;
+    }).join("")}</tbody></table></div>`;
+}
+
+function renderBacktest(bt){
+  if(!bt||bt.error||!Object.keys(bt).length){
+    $("#btSlot").innerHTML=`<div class="empty reveal">No backtest yet — run
+      <code>python -m groww_predictor.build_dataset</code> then
+      <code>python -m groww_predictor.backtest</code> (needs Groww data access).</div>`;return;
+  }
+  const order=["naive","analytic","lgbm"],names={naive:"Naive (raw open)",analytic:"Analytic projection",lgbm:"LightGBM ranker"};
+  const present=order.filter(k=>bt[k]);
+  let best=present[0];present.forEach(k=>{if((bt[k].actual1_in_pred3||0)>(bt[best].actual1_in_pred3||0))best=k;});
+  $("#btSlot").innerHTML=`<div class="btGrid">${present.map((k,i)=>{
+    const m=bt[k];
+    return `<div class="btCard reveal ${k===best?'best':''}" style="animation-delay:${.04*i}s">
+      <h3>${names[k]||k} ${k===best?'<span class="best-badge">★ BEST</span>':''}</h3>
+      <div class="btRow"><span class="k">Actual #1 in our top-3</span><span class="v">${(m.actual1_in_pred3*100).toFixed(0)}%</span></div>
+      <div class="btRow"><span class="k">Exact #1 hit</span><span class="v">${(m.top1_acc*100).toFixed(0)}%</span></div>
+      <div class="btRow"><span class="k">Top-3 overlap</span><span class="v">${(m.top3_jaccard*100).toFixed(0)}%</span></div>
+      <div class="btRow"><span class="k">Test days</span><span class="v" style="color:var(--faint)">${m.days}</span></div>
+    </div>`;}).join("")}</div>`;
+}
+
+async function loadHealth(){
+  try{const h=await getJSON("/health");
+    $("#hdot").className="dot live";$("#hstatus").textContent="predictor online";
+    $("#hmetric").textContent=h.metric||"—";$("#hmodel").textContent=h.model||"—";
+  }catch(e){$("#hdot").className="dot off";$("#hstatus").textContent="predictor offline";}
+}
+async function loadPrediction(){try{renderHero(await getJSON("/predict"));}catch(e){renderHero(null);}}
+async function loadTable(){try{renderTable(await getJSON("/predict"));}catch(e){renderTable(null);}}
+async function loadBacktest(){try{renderBacktest(await getJSON("/backtest"));}catch(e){renderBacktest(null);}}
+
+async function loadAll(){await loadHealth();const d=await getJSON("/predict").catch(()=>null);renderHero(d);renderTable(d);loadBacktest();}
+
+$("#refreshBtn").onclick=loadAll;
+$("#runBtn").onclick=async()=>{
+  const b=$("#runBtn");b.disabled=true;b.textContent="⏳ Scanning the opening window…";
+  try{const d=await getJSON("/predict/run",{method:"POST"});renderHero(d);renderTable(d);
+      toast("Prediction updated — "+(d.most_traded_pick?.symbol||""));}
+  catch(e){toast("Couldn't run: check credentials & that the market is open",true);}
+  finally{b.disabled=false;b.textContent="▶ Run live prediction (09:25)";}
+};
+
+loadAll();
+setInterval(loadPrediction,30000); // light auto-refresh of the cached pick
+</script>
+</body>
+</html>

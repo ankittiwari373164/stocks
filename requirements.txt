@@ -1,0 +1,19 @@
+# Core
+requests>=2.31
+pandas>=2.0
+numpy>=1.24
+python-dotenv>=1.0
+
+# Model (optional but recommended — analytic model works without it)
+lightgbm>=4.0
+scikit-learn>=1.3
+
+# Serving (optional — predict_live.py also just writes JSON without these)
+fastapi>=0.110
+uvicorn>=0.29
+
+# Auth helper (only needed for the TOTP auth flow)
+pyotp>=2.9
+
+# Scheduler (for in-process daily run on Render)
+apscheduler>=3.10

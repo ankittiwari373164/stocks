@@ -1,0 +1,45 @@
+# Render blueprint — FREE tier + UptimeRobot keep-alive.
+#
+# How it works:
+#   * UptimeRobot pings /health every 5 min  -> service never idles (15-min limit), stays awake.
+#   * Because it stays awake, the in-process scheduler fires the 09:25 IST prediction itself.
+#   * Free tier has NO persistent disk: the filesystem is wiped on every restart/redeploy,
+#     so RUN_DATASET_ON_BOOT rebuilds the history when needed.
+#
+# Caveats (free tier):
+#   * Render may restart a free service at any time -> a few-minute rebuild + brief cold start.
+#   * 750 free instance-hours/month per workspace — keep this as your ONLY always-on free service.
+#   * To upgrade to rock-solid always-on with a persistent disk, switch plan to "starter"
+#     and add a disk block (see README) — then UptimeRobot is no longer needed.
+services:
+  - type: web
+    name: groww-predictor
+    runtime: python
+    plan: free
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn groww_predictor.serve:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+      - key: ENABLE_SCHEDULER
+        value: "1"
+      - key: RUN_DATASET_ON_BOOT
+        value: "1"
+      - key: DATA_DIR
+        value: ./data
+      - key: RANK_METRIC
+        value: turnover
+      - key: UNIVERSE
+        value: FNO
+      - key: MODEL_MODE
+        value: auto
+      - key: HISTORY_DAYS
+        value: "30"
+      # --- secrets: set these in the Render dashboard, never commit them ---
+      - key: GROWW_API_KEY
+        sync: false
+      - key: GROWW_API_SECRET
+        sync: false
