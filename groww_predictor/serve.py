@@ -50,7 +50,7 @@ def dashboard():
     return "<h1>dashboard.html missing</h1>"
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health():
     return {"ok": True, "metric": CFG.rank_metric, "model": CFG.model_mode,
             "time": datetime.now().isoformat(timespec="seconds")}

@@ -74,23 +74,25 @@ def day_aggregates(day_df: pd.DataFrame, open_from: str, open_to: str) -> dict |
     }
 
 
-def build_panel(per_symbol_candles: dict, open_from: str, open_to: str) -> pd.DataFrame:
-    """
-    per_symbol_candles: {symbol: candles_list}
-    Returns long panel with one row per (date, symbol) and lagged context
-    features computed without look-ahead leakage.
-    """
+def symbol_day_rows(sym: str, candles: list, open_from: str, open_to: str) -> list[dict]:
+    """Per-day aggregate rows for ONE symbol. Lets callers free raw candles
+    immediately (key for fitting the build into 512 MB on free hosting)."""
+    f = candles_to_frame(candles)
+    if f.empty:
+        return []
     rows = []
-    for sym, candles in per_symbol_candles.items():
-        f = candles_to_frame(candles)
-        if f.empty:
+    for date, day_df in f.groupby("date"):
+        agg = day_aggregates(day_df, open_from, open_to)
+        if agg is None:
             continue
-        for date, day_df in f.groupby("date"):
-            agg = day_aggregates(day_df, open_from, open_to)
-            if agg is None:
-                continue
-            agg.update({"symbol": sym, "date": date})
-            rows.append(agg)
+        agg.update({"symbol": sym, "date": date})
+        rows.append(agg)
+    return rows
+
+
+def finalize_panel(rows: list[dict]) -> pd.DataFrame:
+    """Turn compact per-(symbol,day) aggregate rows into the full feature panel
+    with leak-free lagged context. `rows` is tiny (~symbols x trading-days)."""
     if not rows:
         return pd.DataFrame()
 
@@ -130,6 +132,16 @@ def build_panel(per_symbol_candles: dict, open_from: str, open_to: str) -> pd.Da
 
     panel = panel.drop(columns=["_share"])
     return panel
+
+
+def build_panel(per_symbol_candles: dict, open_from: str, open_to: str) -> pd.DataFrame:
+    """Convenience wrapper (used by the offline self-test). For low-memory
+    production builds, callers should stream symbol_day_rows() instead so raw
+    candles can be freed per symbol — see build_dataset.py."""
+    rows = []
+    for sym, candles in per_symbol_candles.items():
+        rows.extend(symbol_day_rows(sym, candles, open_from, open_to))
+    return finalize_panel(rows)
 
 
 FEATURE_COLS = [
