@@ -14,6 +14,7 @@ uvicorn>=0.29
 
 # Auth helper (only needed for the TOTP auth flow)
 pyotp>=2.9
+growwapi>=1.5         # official SDK, used to mint the access token (TOTP/secret flows)
 
 # Scheduler (for in-process daily run on Render)
 apscheduler>=3.10

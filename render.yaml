@@ -38,8 +38,17 @@ services:
         value: auto
       - key: HISTORY_DAYS
         value: "30"
-      # --- secrets: set these in the Render dashboard, never commit them ---
+      - key: DATASET_MAX_SYMBOLS
+        value: "0"            # 0 = build all (streaming build is memory-safe). Set a number ONLY if you see restart loops (note: caps alphabetically).
+      # --- secrets: set in the Render dashboard, never commit them ---
+      # RECOMMENDED for an automated bot: the TOTP key (no daily manual approval).
+      #   GROWW_API_KEY     = the TOTP *token* from your TOTP key
+      #   GROWW_TOTP_SECRET = the TOTP *secret* for that key
+      # (Do NOT use GROWW_ACCESS_TOKEN — it expires every day at 6 AM IST.)
       - key: GROWW_API_KEY
         sync: false
-      - key: GROWW_API_SECRET
+      - key: GROWW_TOTP_SECRET
         sync: false
+      # Alternative (needs a manual "approve" on the Groww keys page each morning):
+      # - key: GROWW_API_SECRET
+      #   sync: false

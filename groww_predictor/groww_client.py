@@ -69,14 +69,45 @@ class GrowwClient:
         cfg = self.cfg
         if cfg.access_token:
             return cfg.access_token
+
+        # Prefer the official Groww SDK to mint the access token — its format
+        # is guaranteed to match the API (avoids hand-rolled checksum/TOTP bugs).
+        try:
+            from growwapi import GrowwAPI
+            if cfg.api_key and cfg.totp_secret:
+                import pyotp
+                totp = pyotp.TOTP(cfg.totp_secret).now()
+                return self._extract_token(GrowwAPI.get_access_token(api_key=cfg.api_key, totp=totp))
+            if cfg.api_key and cfg.api_secret:
+                return self._extract_token(GrowwAPI.get_access_token(api_key=cfg.api_key, secret=cfg.api_secret))
+        except Exception as e:  # noqa
+            print(f"[auth] SDK token generation failed ({e}); trying REST fallback", flush=True)
+
+        # REST fallbacks
         if cfg.api_key and cfg.api_secret:
             return self._token_from_secret()
         if cfg.api_key and cfg.totp_secret:
             return self._token_from_totp()
         raise RuntimeError(
-            "No Groww credentials found. Set GROWW_ACCESS_TOKEN, or "
-            "GROWW_API_KEY+GROWW_API_SECRET, or GROWW_API_KEY+GROWW_TOTP_SECRET in .env"
+            "No Groww credentials found. For an automated bot use the TOTP key: set "
+            "GROWW_API_KEY (the TOTP token) + GROWW_TOTP_SECRET in .env. "
+            "(Avoid GROWW_ACCESS_TOKEN — it expires daily at 6 AM.)"
         )
+
+    @staticmethod
+    def _extract_token(resp) -> str:
+        """get_access_token may return a str or a dict — normalise to the token string."""
+        if isinstance(resp, str):
+            return resp
+        if isinstance(resp, dict):
+            for k in ("token", "access_token", "accessToken"):
+                if resp.get(k):
+                    return resp[k]
+            # last resort: first string value in the dict
+            for v in resp.values():
+                if isinstance(v, str) and len(v) > 20:
+                    return v
+        raise RuntimeError(f"Could not extract access token from SDK response: {type(resp)}")
 
     def _post_token(self, body: dict) -> str:
         r = requests.post(
