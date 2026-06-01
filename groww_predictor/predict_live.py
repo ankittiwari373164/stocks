@@ -49,7 +49,8 @@ def predict_live(client: GrowwClient | None = None, top_n: int = 10) -> dict:
     client = client or GrowwClient()
     uni = build_universe(client)
     ctx = _context_table()
-    global_share = ctx["open_share_hist"].median() if "open_share_hist" in ctx else 0.06
+    gs = ctx["open_share_hist"].median() if ("open_share_hist" in ctx and len(ctx)) else None
+    global_share = float(gs) if (gs is not None and np.isfinite(gs)) else 0.06  # sane default until dataset is built
 
     rows = []
     for sym in uni["trading_symbol"]:
@@ -81,15 +82,17 @@ def predict_live(client: GrowwClient | None = None, top_n: int = 10) -> dict:
         raise RuntimeError("No live quotes returned — is the market open and token valid?")
 
     df = pd.DataFrame(rows).merge(ctx, on="symbol", how="left")
+    # context cols may arrive as object dtype (empty merge) — coerce to float
+    for c in ["open_share_hist", "prev_full_vol", "prev_full_turnover", "avg5_full_vol",
+              "avg20_full_vol", "avg20_full_turnover", "std20_full_vol"]:
+        if c not in df:
+            df[c] = np.nan
+        df[c] = pd.to_numeric(df[c], errors="coerce")
     df["open_share_hist"] = df["open_share_hist"].fillna(global_share).clip(1e-4, 0.9)
 
     # rebuild the projection + derived features with today's live numbers
     df["proj_full_vol"] = df["open_vol"] / df["open_share_hist"]
     df["proj_full_turnover"] = df["proj_full_vol"] * df["open_vwap"]
-    for c in ["prev_full_vol", "prev_full_turnover", "avg5_full_vol",
-              "avg20_full_vol", "avg20_full_turnover", "std20_full_vol"]:
-        if c not in df:
-            df[c] = np.nan
     df["vol_zscore"] = ((df["open_vol"] - df["avg20_full_vol"] * df["open_share_hist"])
                         / (df["std20_full_vol"] * df["open_share_hist"] + 1e-9)).fillna(0)
     df["gap_pct"] = (df["open_first"] / df["prev_close"] - 1.0).replace([np.inf, -np.inf], np.nan).fillna(0)
@@ -110,6 +113,15 @@ def predict_live(client: GrowwClient | None = None, top_n: int = 10) -> dict:
         confidence = 50.0
 
     pick = ranked.iloc[0]
+
+    def rnd(x, n=2):
+        """Round, but turn NaN/inf into None so the result is always JSON-valid."""
+        try:
+            xf = float(x)
+        except (TypeError, ValueError):
+            return None
+        return round(xf, n) if np.isfinite(xf) else None
+
     result = {
         "as_of": datetime.now().isoformat(timespec="seconds"),
         "window": f"{CFG.open_from}-{CFG.open_to} IST",
@@ -118,26 +130,27 @@ def predict_live(client: GrowwClient | None = None, top_n: int = 10) -> dict:
         "scanned": int(len(ranked)),
         "most_traded_pick": {
             "symbol": pick["symbol"],
-            "confidence_pct": round(confidence, 1),
+            "confidence_pct": rnd(confidence, 1),
             "open_vol": int(pick["open_vol"]),
-            "open_turnover_cr": round(pick["open_turnover"] / 1e7, 2),
-            "proj_full_turnover_cr": round(pick["proj_full_turnover"] / 1e7, 2),
-            "open_ret_pct": round(pick["open_ret"] * 100, 2),
+            "open_turnover_cr": rnd(pick["open_turnover"] / 1e7),
+            "proj_full_turnover_cr": rnd(pick["proj_full_turnover"] / 1e7),
+            "open_ret_pct": rnd(pick["open_ret"] * 100),
             "groww_url": f"https://groww.in/stocks/{str(pick['symbol']).lower()}",
         },
         "top": [
             {
                 "rank": int(r.pred_rank),
                 "symbol": r.symbol,
-                "open_turnover_cr": round(r.open_turnover / 1e7, 2),
-                "proj_full_turnover_cr": round(r.proj_full_turnover / 1e7, 2),
-                "open_ret_pct": round(r.open_ret * 100, 2),
-                "score": round(float(r.score), 4),
+                "open_turnover_cr": rnd(r.open_turnover / 1e7),
+                "proj_full_turnover_cr": rnd(r.proj_full_turnover / 1e7),
+                "open_ret_pct": rnd(r.open_ret * 100),
+                "score": rnd(float(r.score), 4),
             }
             for r in top.itertuples()
         ],
     }
-    CFG.predictions_path.write_text(json.dumps(result, indent=2))
+    # allow_nan=False guarantees we never write invalid JSON; rnd() already nulls non-finite
+    CFG.predictions_path.write_text(json.dumps(result, indent=2, allow_nan=False))
     print(json.dumps(result["most_traded_pick"], indent=2))
     print(f"[live] full ranking written -> {CFG.predictions_path}")
     return result

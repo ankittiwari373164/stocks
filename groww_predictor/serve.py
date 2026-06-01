@@ -67,7 +67,19 @@ def health():
 @app.get("/predict")
 def get_prediction():
     if CFG.predictions_path.exists():
-        return json.loads(CFG.predictions_path.read_text())
+        import math
+        def _clean(o):
+            if isinstance(o, float):
+                return o if math.isfinite(o) else None
+            if isinstance(o, dict):
+                return {k: _clean(v) for k, v in o.items()}
+            if isinstance(o, list):
+                return [_clean(v) for v in o]
+            return o
+        try:
+            return _clean(json.loads(CFG.predictions_path.read_text()))
+        except Exception:  # noqa
+            return {"error": "prediction file unreadable — re-run the prediction"}
     return {"error": "no prediction yet — run POST /predict/run after 09:25 IST"}
 
 
