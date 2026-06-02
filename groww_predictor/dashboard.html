@@ -180,6 +180,9 @@ function renderHero(d){
     $("#rankCount").textContent="";return;
   }
   const moveCls=p.open_ret_pct>=0?"up":"down";
+  const sig=(p.signal||"NEUTRAL");
+  const sigCls=sig==="BUY"?"up":(sig==="SELL"?"down":"");
+  const sigColor=sig==="BUY"?"var(--up)":(sig==="SELL"?"var(--down)":"var(--muted)");
   $("#heroSlot").innerHTML=`
    <div class="hero reveal">
     <div class="label">Predicted most-traded stock today</div>
@@ -187,6 +190,7 @@ function renderHero(d){
       <div>
         <div class="pickName">${p.symbol}</div>
         <div class="pickMeta">
+          <span class="tag" style="border-color:${sigColor};color:${sigColor}">${sig} lean</span>
           <span class="tag">${d.metric||"turnover"}</span>
           <span class="tag">${d.scanned||0} scanned</span>
           <a class="pickLink" href="${p.groww_url}" target="_blank" rel="noopener">View on Groww ↗</a>
@@ -194,13 +198,18 @@ function renderHero(d){
       </div>
       <div class="stats">
         <div class="stat"><div class="k">Proj. full-day turnover</div><div class="v">₹${fmtCr(p.proj_full_turnover_cr)} <small>Cr</small></div></div>
-        <div class="stat"><div class="k">Opening turnover</div><div class="v">₹${fmtCr(p.open_turnover_cr)} <small>Cr</small></div></div>
-        <div class="stat"><div class="k">Opening move</div><div class="v ${moveCls}">${pct(p.open_ret_pct)}</div></div>
-        <div class="stat"><div class="k">Opening volume</div><div class="v">${fmtCr(p.open_vol)}</div></div>
-        <div class="stat conf"><div class="k">Confidence (separation of #1 from field)</div>
+        <div class="stat"><div class="k">Last price</div><div class="v">₹${fmtCr(p.last_price)} <small class="${(p.day_change_perc||0)>=0?'up':'down'}">${pct(p.day_change_perc)}</small></div></div>
+        <div class="stat"><div class="k">Predicted day high</div><div class="v up">₹${fmtCr(p.expected_high)}</div></div>
+        <div class="stat"><div class="k">Predicted day low</div><div class="v down">₹${fmtCr(p.expected_low)}</div></div>
+        <div class="stat conf"><div class="k">Most-traded confidence (separation of #1 from field)</div>
           <div class="v">${(p.confidence_pct??0).toFixed(0)}<small>%</small></div>
           <div class="confBar"><i id="confFill"></i></div></div>
       </div>
+    </div>
+    <div style="margin-top:14px;font-size:12px;color:var(--faint);line-height:1.5">
+      <b style="color:var(--muted)">Buy/Sell is a lean, not a forecast.</b>
+      Direction is barely predictable intraday — see the backtested hit-rate below before trusting it.
+      The High/Low band is an expectation (≈${p.expected_range_pct||'—'}% range), not a guarantee. Not investment advice.
     </div>
    </div>`;
   requestAnimationFrame(()=>{const f=$("#confFill");if(f)f.style.width=Math.max(3,Math.min(100,p.confidence_pct||0))+"%";});
@@ -213,19 +222,20 @@ function renderTable(d){
   const max=Math.max(...rows.map(r=>r.proj_full_turnover_cr||0))||1;
   $("#rankCount").textContent=`(top ${rows.length})`;
   $("#tableSlot").innerHTML=`<div class="tableCard reveal"><table>
-    <thead><tr><th class="r">#</th><th>Symbol</th>
+    <thead><tr><th class="r">#</th><th>Symbol</th><th>Lean</th>
       <th class="r">Open turnover</th><th class="r barCell">Proj. full-day</th>
-      <th class="r">Open move</th><th class="r">Score</th></tr></thead>
+      <th class="r">Exp. low–high</th></tr></thead>
     <tbody>${rows.map(r=>{
       const w=Math.max(2,(r.proj_full_turnover_cr/max)*100);
-      const mc=r.open_ret_pct>=0?"up":"down";
+      const sg=r.signal||"NEUTRAL";
+      const sgc=sg==="BUY"?"var(--up)":(sg==="SELL"?"var(--down)":"var(--faint)");
       return `<tr class="${r.rank===1?'lead':''}">
         <td class="r rk ${r.rank===1?'gold':''}">${r.rank}</td>
         <td class="sym">${r.symbol}</td>
+        <td style="color:${sgc};font-weight:600;font-size:12px">${sg}</td>
         <td class="r num">₹${fmtCr(r.open_turnover_cr)}</td>
         <td class="r num barCell">₹${fmtCr(r.proj_full_turnover_cr)}<span class="bar" style="width:${w*1.1}px"></span></td>
-        <td class="r num ${mc}">${pct(r.open_ret_pct)}</td>
-        <td class="r num" style="color:var(--muted)">${(r.score??0).toFixed(2)}</td></tr>`;
+        <td class="r num" style="color:var(--muted)">${r.expected_low!=null?'₹'+fmtCr(r.expected_low):'—'}–${r.expected_high!=null?'₹'+fmtCr(r.expected_high):'—'}</td></tr>`;
     }).join("")}</tbody></table></div>`;
 }
 

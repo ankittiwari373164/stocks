@@ -58,6 +58,10 @@ def day_aggregates(day_df: pd.DataFrame, open_from: str, open_to: str) -> dict |
 
     full_vol = float(day_df["v"].sum())
     full_turnover = float((day_df["v"] * day_df["c"]).sum())
+    day_open = float(day_df["o"].iloc[0])
+    day_high = float(day_df["h"].max())
+    day_low = float(day_df["l"].min())
+    day_close = float(day_df["c"].iloc[-1])
 
     return {
         "open_vol": open_vol,
@@ -66,8 +70,13 @@ def day_aggregates(day_df: pd.DataFrame, open_from: str, open_to: str) -> dict |
         "open_range_pct": ((win_high - win_low) / first_open) if first_open else 0.0,
         "open_vwap": open_vwap,
         "open_first": first_open,
+        "open_last": last_close,          # price at end of the opening window (~09:25)
         "open_high": win_high,
         "open_low": win_low,
+        "day_open": day_open,
+        "day_high": day_high,
+        "day_low": day_low,
+        "day_close": day_close,
         "full_vol": full_vol,
         "full_turnover": full_turnover,
         "n_min": int(len(day_df)),
@@ -129,6 +138,19 @@ def finalize_panel(rows: list[dict]) -> pd.DataFrame:
                            / (panel["std20_full_vol"] * panel["open_share_hist"] + 1e-9))
     panel["gap_pct"] = (panel["open_first"] / panel["prev_close"] - 1.0).replace([np.inf, -np.inf], np.nan).fillna(0)
     panel["dow"] = panel["date"].dt.dayofweek
+
+    # ---- volatility / range context (for the High-Low forecast) ----
+    # realised full-day range as a fraction of the day's open
+    panel["day_range_pct"] = ((panel["day_high"] - panel["day_low"]) / panel["day_open"]).replace([np.inf, -np.inf], np.nan)
+    # leak-free: each day uses only the median of *prior* days' ranges
+    panel["hist_range_pct"] = panel.groupby("symbol")["day_range_pct"].transform(
+        lambda s: s.shift(1).expanding(min_periods=3).median()
+    )
+    panel["hist_range_pct"] = panel["hist_range_pct"].fillna(panel["day_range_pct"].median()).clip(0.002, 0.25)
+
+    # ---- direction label (for honestly backtesting the buy/sell lean) ----
+    # return from the end of the opening window (~09:25) to the close
+    panel["rest_of_day_ret"] = (panel["day_close"] / panel["open_last"] - 1.0).replace([np.inf, -np.inf], np.nan).fillna(0)
 
     panel = panel.drop(columns=["_share"])
     return panel

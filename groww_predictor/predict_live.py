@@ -22,19 +22,33 @@ from .model import rank_day
 
 
 def _parse_ohlc(payload: dict) -> dict:
-    o = payload.get("open"); h = payload.get("high")
-    l = payload.get("low"); c = payload.get("close")
-    if o is None and isinstance(payload.get("ohlc"), str):
-        nums = dict(re.findall(r"(open|high|low|close):\s*([0-9.]+)", payload["ohlc"]))
-        o = float(nums.get("open", 0)); h = float(nums.get("high", 0))
-        l = float(nums.get("low", 0)); c = float(nums.get("close", 0))
-    return {"open": o or 0, "high": h or 0, "low": l or 0, "close": c or 0}
+    """Groww returns ohlc as a string like "{open: 1.5,high: 2,low: 1,close: 1.4}"
+    (sometimes a dict). Parse defensively; fall back to top-level keys."""
+    out = {"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0}
+    raw = payload.get("ohlc")
+    if isinstance(raw, dict):
+        for k in out:
+            try:
+                out[k] = float(raw.get(k) or 0)
+            except (TypeError, ValueError):
+                pass
+    elif isinstance(raw, str):
+        for k, v in re.findall(r"(open|high|low|close)\s*[:=]\s*(-?[0-9]*\.?[0-9]+)", raw):
+            out[k] = float(v)
+    for k in out:  # fall back to any top-level fields
+        if not out[k] and payload.get(k) is not None:
+            try:
+                out[k] = float(payload[k])
+            except (TypeError, ValueError):
+                pass
+    return out
 
 
 def _context_table() -> pd.DataFrame:
     """Latest leak-free context per symbol from the training dataset."""
     cols = ["symbol", "open_share_hist", "prev_full_vol", "prev_full_turnover",
-            "avg5_full_vol", "avg20_full_vol", "avg20_full_turnover", "std20_full_vol"]
+            "avg5_full_vol", "avg20_full_vol", "avg20_full_turnover", "std20_full_vol",
+            "hist_range_pct"]
     if CFG.dataset_path.exists():
         ds = pd.read_pickle(CFG.dataset_path)
         ctx = ds.sort_values("date").groupby("symbol").last().reset_index()
@@ -63,16 +77,22 @@ def predict_live(client: GrowwClient | None = None, top_n: int = 10) -> dict:
             ohlc = _parse_ohlc(q)
             last = float(q.get("last_price") or ohlc["close"] or avg_price)
             day_change = float(q.get("day_change") or 0)
-            prev_close = last - day_change if last else 0
+            # prefer Groww's own % change vs prev close (reliable, no parsing)
+            day_change_perc = q.get("day_change_perc")
+            if day_change_perc is None:
+                day_change_perc = (day_change / (last - day_change) * 100) if (last - day_change) else 0.0
+            prev_close = (last - day_change) if last else 0
+            open_px = ohlc["open"] or last
             rows.append({
                 "symbol": sym,
                 "open_vol": vol,
                 "open_vwap": avg_price or last,
                 "open_turnover": vol * (avg_price or last),
-                "open_first": ohlc["open"] or last,
-                "open_high": ohlc["high"], "open_low": ohlc["low"],
-                "open_ret": (last / ohlc["open"] - 1.0) if ohlc["open"] else 0.0,
-                "open_range_pct": ((ohlc["high"] - ohlc["low"]) / ohlc["open"]) if ohlc["open"] else 0.0,
+                "open_first": open_px,
+                "open_high": ohlc["high"] or last, "open_low": ohlc["low"] or last,
+                "open_ret": (last / open_px - 1.0) if open_px else 0.0,
+                "open_range_pct": ((ohlc["high"] - ohlc["low"]) / open_px) if (open_px and ohlc["high"]) else 0.0,
+                "day_change_perc": float(day_change_perc or 0),
                 "last_price": last, "prev_close": prev_close,
             })
         except Exception as e:  # noqa
@@ -97,9 +117,27 @@ def predict_live(client: GrowwClient | None = None, top_n: int = 10) -> dict:
                         / (df["std20_full_vol"] * df["open_share_hist"] + 1e-9)).fillna(0)
     df["gap_pct"] = (df["open_first"] / df["prev_close"] - 1.0).replace([np.inf, -np.inf], np.nan).fillna(0)
     df["dow"] = datetime.now().weekday()
+    df["hist_range_pct"] = pd.to_numeric(df.get("hist_range_pct"), errors="coerce")
+    df["hist_range_pct"] = df["hist_range_pct"].fillna(0.02).clip(0.002, 0.25)
     for c in FEATURE_COLS:
         if c not in df:
             df[c] = 0.0
+
+    # ---- buy/sell lean + expected High/Low (see signals.py for honesty notes) ----
+    from .signals import directional_lean, expected_high_low
+    rng = (df["open_high"] - df["open_low"]).replace(0, np.nan)
+    df["pos_in_range"] = ((df["last_price"] - df["open_low"]) / rng).clip(0, 1).fillna(0.5)
+    leans = df.apply(lambda r: directional_lean(r["gap_pct"], r["open_ret"],
+                                                r["pos_in_range"], r.get("vol_zscore", 0)), axis=1)
+    df["signal"] = [x[0] for x in leans]
+    df["signal_score"] = [x[1] for x in leans]
+    df["signal_conf"] = [x[2] for x in leans]
+    hl = df.apply(lambda r: expected_high_low(r["open_first"] or r["last_price"], r["hist_range_pct"],
+                                              max(r["open_high"], r["last_price"]),
+                                              min(r["open_low"], r["last_price"]), r["signal_score"]), axis=1)
+    df["expected_high"] = [x["expected_high"] for x in hl]
+    df["expected_low"] = [x["expected_low"] for x in hl]
+    df["expected_range_pct"] = [x["expected_range_pct"] for x in hl]
 
     ranked = rank_day(df)
     top = ranked.head(top_n)
@@ -135,6 +173,13 @@ def predict_live(client: GrowwClient | None = None, top_n: int = 10) -> dict:
             "open_turnover_cr": rnd(pick["open_turnover"] / 1e7),
             "proj_full_turnover_cr": rnd(pick["proj_full_turnover"] / 1e7),
             "open_ret_pct": rnd(pick["open_ret"] * 100),
+            "day_change_perc": rnd(pick.get("day_change_perc", 0)),
+            "last_price": rnd(pick.get("last_price")),
+            "signal": pick.get("signal", "NEUTRAL"),
+            "signal_confidence": rnd(pick.get("signal_conf", 0), 1),
+            "expected_high": rnd(pick.get("expected_high")),
+            "expected_low": rnd(pick.get("expected_low")),
+            "expected_range_pct": rnd(pick.get("expected_range_pct")),
             "groww_url": f"https://groww.in/stocks/{str(pick['symbol']).lower()}",
         },
         "top": [
@@ -144,6 +189,9 @@ def predict_live(client: GrowwClient | None = None, top_n: int = 10) -> dict:
                 "open_turnover_cr": rnd(r.open_turnover / 1e7),
                 "proj_full_turnover_cr": rnd(r.proj_full_turnover / 1e7),
                 "open_ret_pct": rnd(r.open_ret * 100),
+                "signal": getattr(r, "signal", "NEUTRAL"),
+                "expected_high": rnd(getattr(r, "expected_high", None)),
+                "expected_low": rnd(getattr(r, "expected_low", None)),
                 "score": rnd(float(r.score), 4),
             }
             for r in top.itertuples()

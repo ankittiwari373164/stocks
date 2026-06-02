@@ -46,6 +46,44 @@ def _eval_ranker(test: pd.DataFrame, score_fn) -> dict:
             "top3_jaccard": jac / n}
 
 
+def signal_backtest(panel: pd.DataFrame) -> dict:
+    """Honestly measure the buy/sell lean and the High/Low range on the same data.
+       - direction hit-rate: does the lean's sign match the rest-of-day move?
+       - range coverage: did the actual day stay inside the expected band?
+    """
+    from .signals import directional_lean, expected_high_low
+    need = {"gap_pct", "open_ret", "open_high", "open_low", "open_last",
+            "rest_of_day_ret", "day_high", "day_low", "hist_range_pct"}
+    if not need.issubset(panel.columns):
+        return {}
+    d = panel.dropna(subset=list(need)).copy()
+    if d.empty:
+        return {}
+
+    rng = (d["open_high"] - d["open_low"]).replace(0, np.nan)
+    pos = ((d["open_last"] - d["open_low"]) / rng).clip(0, 1).fillna(0.5)
+
+    hits = directional = 0
+    covered = 0
+    for (g, m, p, vz, ror, dh, dl, do, hr) in zip(
+        d["gap_pct"], d["open_ret"], pos, d.get("vol_zscore", pd.Series(0, index=d.index)),
+        d["rest_of_day_ret"], d["day_high"], d["day_low"], d["day_open"], d["hist_range_pct"]):
+        label, score, _ = directional_lean(g, m, p, vz)
+        if label != "NEUTRAL":
+            directional += 1
+            hits += int((score > 0 and ror > 0) or (score < 0 and ror < 0))
+        band = expected_high_low(do, hr, None, None, score)   # full-day band centred on the open
+        covered += int(dh <= band["expected_high"] and dl >= band["expected_low"])
+
+    n = len(d)
+    return {
+        "direction_hit_rate": round(hits / directional, 3) if directional else None,
+        "directional_signals_pct": round(directional / n, 3),
+        "range_coverage": round(covered / n, 3),
+        "samples": int(n),
+    }
+
+
 def backtest(panel: pd.DataFrame | None = None) -> pd.DataFrame:
     if panel is None:
         panel = pd.read_pickle(CFG.dataset_path)
@@ -95,6 +133,16 @@ def backtest(panel: pd.DataFrame | None = None) -> pd.DataFrame:
     print(f"[backtest] auto-mode will serve: {best.upper()} "
           f"(actual#1-in-top3={results[best]['actual1_in_pred3']:.2f} over "
           f"{results[best]['days']} days)")
+
+    # honest measurement of the buy/sell lean + High/Low range
+    sig = signal_backtest(panel)
+    if sig:
+        print("\n=== SIGNAL BACKTEST (buy/sell is weak by nature — read these honestly) ===")
+        print(f"  direction hit-rate : {sig['direction_hit_rate']}  "
+              f"(on {sig['directional_signals_pct']*100:.0f}% of days a non-neutral lean fired)")
+        print(f"  High/Low coverage  : {sig['range_coverage']}  "
+              f"(fraction of days the real day stayed inside the predicted band)")
+        print(f"  samples            : {sig['samples']}")
     return out
 
 
