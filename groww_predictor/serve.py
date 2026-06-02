@@ -89,6 +89,12 @@ def run_prediction():
     return predict_live()
 
 
+@app.get("/track")
+def get_track():
+    from .tracker import summary
+    return summary()
+
+
 @app.get("/backtest")
 def get_backtest():
     if not CFG.dataset_path.exists():

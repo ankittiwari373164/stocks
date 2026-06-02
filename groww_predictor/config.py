@@ -71,5 +71,9 @@ class Config:
     def best_model_path(self) -> Path:
         return self.data_dir / "best_model.json"
 
+    @property
+    def track_path(self) -> Path:
+        return self.data_dir / "track.json"
+
 
 CFG = Config()

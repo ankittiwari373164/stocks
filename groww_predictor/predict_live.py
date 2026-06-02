@@ -59,6 +59,22 @@ def _context_table() -> pd.DataFrame:
     return pd.DataFrame(columns=cols)
 
 
+def _daily_series(lookback: int = 40) -> dict:
+    """{symbol: (highs, lows, closes)} of recent daily OHLC from the dataset,
+    for computing technical indicators on the live picks."""
+    if not CFG.dataset_path.exists():
+        return {}
+    ds = pd.read_pickle(CFG.dataset_path)
+    need = {"symbol", "date", "day_high", "day_low", "day_close"}
+    if not need.issubset(ds.columns):
+        return {}
+    out = {}
+    for sym, g in ds.sort_values("date").groupby("symbol"):
+        g = g.tail(lookback)
+        out[sym] = (g["day_high"].tolist(), g["day_low"].tolist(), g["day_close"].tolist())
+    return out
+
+
 def predict_live(client: GrowwClient | None = None, top_n: int = 10) -> dict:
     client = client or GrowwClient()
     uni = build_universe(client)
@@ -140,7 +156,22 @@ def predict_live(client: GrowwClient | None = None, top_n: int = 10) -> dict:
     df["expected_range_pct"] = [x["expected_range_pct"] for x in hl]
 
     ranked = rank_day(df)
-    top = ranked.head(top_n)
+    top = ranked.head(top_n).copy()
+
+    # ---- indicators + ATR-based target/stop/RR for the displayed rows ----
+    from .signals import blend_with_indicators, trade_levels
+    from .indicators import compute_all
+    daily = _daily_series()  # {symbol: (highs, lows, closes)} from history
+    enrich = {}
+    for r in top.itertuples():
+        hi, lo, cl = daily.get(r.symbol, ([], [], []))
+        ind = compute_all(hi, lo, cl, last_price=getattr(r, "last_price", None),
+                          vwap=getattr(r, "open_vwap", None)) if cl else \
+              {"rsi": None, "macd_hist": None, "atr": None, "adx": None, "ind_score": 0.0}
+        blended = blend_with_indicators(getattr(r, "signal_score", 0.0), ind["ind_score"], ind["adx"])
+        lv = trade_levels(getattr(r, "last_price", 0.0), ind["atr"], blended,
+                          getattr(r, "hist_range_pct", 0.02))
+        enrich[r.symbol] = {**ind, **lv, "blended": round(blended, 3)}
 
     # confidence = separation of #1 from the field, squashed to 0-100
     s = ranked["score"].to_numpy()
@@ -151,6 +182,7 @@ def predict_live(client: GrowwClient | None = None, top_n: int = 10) -> dict:
         confidence = 50.0
 
     pick = ranked.iloc[0]
+    pe = enrich.get(pick["symbol"], {})
 
     def rnd(x, n=2):
         """Round, but turn NaN/inf into None so the result is always JSON-valid."""
@@ -175,11 +207,16 @@ def predict_live(client: GrowwClient | None = None, top_n: int = 10) -> dict:
             "open_ret_pct": rnd(pick["open_ret"] * 100),
             "day_change_perc": rnd(pick.get("day_change_perc", 0)),
             "last_price": rnd(pick.get("last_price")),
-            "signal": pick.get("signal", "NEUTRAL"),
-            "signal_confidence": rnd(pick.get("signal_conf", 0), 1),
+            "signal": pe.get("side", pick.get("signal", "NEUTRAL")),
+            "signal_confidence": rnd(abs(pe.get("blended", 0)) * 100, 1),
+            "target": pe.get("target"),
+            "stop": pe.get("stop"),
+            "rr": pe.get("rr"),
             "expected_high": rnd(pick.get("expected_high")),
             "expected_low": rnd(pick.get("expected_low")),
             "expected_range_pct": rnd(pick.get("expected_range_pct")),
+            "rsi": pe.get("rsi"), "macd_hist": pe.get("macd_hist"),
+            "adx": pe.get("adx"), "atr": pe.get("atr"),
             "groww_url": f"https://groww.in/stocks/{str(pick['symbol']).lower()}",
         },
         "top": [
@@ -188,17 +225,23 @@ def predict_live(client: GrowwClient | None = None, top_n: int = 10) -> dict:
                 "symbol": r.symbol,
                 "open_turnover_cr": rnd(r.open_turnover / 1e7),
                 "proj_full_turnover_cr": rnd(r.proj_full_turnover / 1e7),
-                "open_ret_pct": rnd(r.open_ret * 100),
-                "signal": getattr(r, "signal", "NEUTRAL"),
+                "signal": enrich.get(r.symbol, {}).get("side", "NEUTRAL"),
+                "target": enrich.get(r.symbol, {}).get("target"),
+                "stop": enrich.get(r.symbol, {}).get("stop"),
+                "rr": enrich.get(r.symbol, {}).get("rr"),
                 "expected_high": rnd(getattr(r, "expected_high", None)),
                 "expected_low": rnd(getattr(r, "expected_low", None)),
-                "score": rnd(float(r.score), 4),
             }
             for r in top.itertuples()
         ],
     }
     # allow_nan=False guarantees we never write invalid JSON; rnd() already nulls non-finite
     CFG.predictions_path.write_text(json.dumps(result, indent=2, allow_nan=False))
+    try:
+        from .tracker import record_prediction
+        record_prediction(result)
+    except Exception as e:  # noqa
+        print(f"[tracker] could not log prediction: {e}")
     print(json.dumps(result["most_traded_pick"], indent=2))
     print(f"[live] full ranking written -> {CFG.predictions_path}")
     return result

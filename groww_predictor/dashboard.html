@@ -144,6 +144,9 @@
     <h2>Predicted ranking <span id="rankCount"></span></h2>
     <div id="tableSlot"></div>
 
+    <h2>Live track record <span>your real, measured accuracy</span></h2>
+    <div id="trackSlot"></div>
+
     <h2>Backtest accuracy <span>out&#8209;of&#8209;sample</span></h2>
     <div id="btSlot"></div>
   </main>
@@ -197,13 +200,14 @@ function renderHero(d){
         </div>
       </div>
       <div class="stats">
-        <div class="stat"><div class="k">Proj. full-day turnover</div><div class="v">₹${fmtCr(p.proj_full_turnover_cr)} <small>Cr</small></div></div>
+        <div class="stat"><div class="k">Signal</div><div class="v ${sigCls}">${sig}<small> ${(p.signal_confidence??0).toFixed(0)}%</small></div></div>
         <div class="stat"><div class="k">Last price</div><div class="v">₹${fmtCr(p.last_price)} <small class="${(p.day_change_perc||0)>=0?'up':'down'}">${pct(p.day_change_perc)}</small></div></div>
-        <div class="stat"><div class="k">Predicted day high</div><div class="v up">₹${fmtCr(p.expected_high)}</div></div>
-        <div class="stat"><div class="k">Predicted day low</div><div class="v down">₹${fmtCr(p.expected_low)}</div></div>
-        <div class="stat conf"><div class="k">Most-traded confidence (separation of #1 from field)</div>
-          <div class="v">${(p.confidence_pct??0).toFixed(0)}<small>%</small></div>
-          <div class="confBar"><i id="confFill"></i></div></div>
+        <div class="stat"><div class="k">Target</div><div class="v up">${p.target!=null?'₹'+fmtCr(p.target):'—'}</div></div>
+        <div class="stat"><div class="k">Stop-loss · R:R</div><div class="v down">${p.stop!=null?'₹'+fmtCr(p.stop):'—'} <small style="color:var(--muted)">${p.rr!=null?p.rr+':1':''}</small></div></div>
+        <div class="stat"><div class="k">Predicted day low – high</div><div class="v">₹${fmtCr(p.expected_low)} – ₹${fmtCr(p.expected_high)}</div></div>
+        <div class="stat"><div class="k">Proj. full-day turnover</div><div class="v">₹${fmtCr(p.proj_full_turnover_cr)} <small>Cr</small></div></div>
+        <div class="stat conf"><div class="k">Indicators</div>
+          <div class="v" style="font-size:13px">RSI ${p.rsi??'—'} · MACD ${p.macd_hist??'—'} · ADX ${p.adx??'—'} · ATR ${p.atr??'—'}</div></div>
       </div>
     </div>
     <div style="margin-top:14px;font-size:12px;color:var(--faint);line-height:1.5">
@@ -269,7 +273,39 @@ async function loadPrediction(){try{renderHero(await getJSON("/predict"));}catch
 async function loadTable(){try{renderTable(await getJSON("/predict"));}catch(e){renderTable(null);}}
 async function loadBacktest(){try{renderBacktest(await getJSON("/backtest"));}catch(e){renderBacktest(null);}}
 
-async function loadAll(){await loadHealth();const d=await getJSON("/predict").catch(()=>null);renderHero(d);renderTable(d);loadBacktest();}
+function renderTrack(t){
+  if(!t||t.error){$("#trackSlot").innerHTML="";return;}
+  const dh=t.direction_hit_rate, bc=t.band_coverage;
+  const dhTxt=dh==null?"—":(dh*100).toFixed(0)+"%";
+  const bcTxt=bc==null?"—":(bc*100).toFixed(0)+"%";
+  const dhCls=dh==null?"":(dh>0.55?"up":(dh<0.5?"down":""));
+  const rows=(t.recent||[]).filter(r=>r.scored).slice(0,8);
+  const note = t.total_scored<10
+    ? `<div class="hint" style="margin-top:10px">Only ${t.total_scored} scored day(s) so far — needs ~15–20 before the hit-rate means anything. Keep it running.</div>` : "";
+  $("#trackSlot").innerHTML=`<div class="btGrid">
+    <div class="btCard ${dhCls==='up'?'best':''}"><h3>Buy/Sell direction</h3>
+      <div class="btRow"><span class="k">Hit-rate (calls correct)</span><span class="v ${dhCls}">${dhTxt}</span></div>
+      <div class="btRow"><span class="k">Directional calls scored</span><span class="v" style="color:var(--faint)">${t.directional_n||0}</span></div>
+      <div class="btRow"><span class="k">vs a coin flip</span><span class="v" style="color:var(--faint)">50%</span></div></div>
+    <div class="btCard"><h3>High/Low band</h3>
+      <div class="btRow"><span class="k">Days inside band</span><span class="v">${bcTxt}</span></div>
+      <div class="btRow"><span class="k">Days scored</span><span class="v" style="color:var(--faint)">${t.total_scored||0}</span></div></div>
+    <div class="btCard"><h3>Log</h3>
+      <div class="btRow"><span class="k">Predictions logged</span><span class="v">${t.total_logged||0}</span></div>
+      <div class="btRow"><span class="k">Scored</span><span class="v" style="color:var(--faint)">${t.total_scored||0}</span></div></div>
+  </div>${note}
+  ${rows.length?`<div class="tableCard reveal" style="margin-top:14px"><table>
+    <thead><tr><th>Date</th><th>Pick</th><th>Call</th><th class="r">Entry</th><th class="r">Close</th><th class="r">Move</th><th>Right?</th></tr></thead>
+    <tbody>${rows.map(r=>`<tr><td class="num">${r.date}</td><td class="sym">${r.pick}</td>
+      <td style="color:${r.signal==='BUY'?'var(--up)':(r.signal==='SELL'?'var(--down)':'var(--faint)')}">${r.signal}</td>
+      <td class="r num">${r.entry!=null?'₹'+fmtCr(r.entry):'—'}</td>
+      <td class="r num">${r.actual_close!=null?'₹'+fmtCr(r.actual_close):'—'}</td>
+      <td class="r num ${(r.move_pct||0)>=0?'up':'down'}">${r.move_pct!=null?pct(r.move_pct):'—'}</td>
+      <td>${r.direction_correct==null?'—':(r.direction_correct?'✓':'✗')}</td></tr>`).join("")}</tbody></table></div>`:""}`;
+}
+async function loadTrack(){try{renderTrack(await getJSON("/track"));}catch(e){renderTrack(null);}}
+
+async function loadAll(){await loadHealth();const d=await getJSON("/predict").catch(()=>null);renderHero(d);renderTable(d);loadTrack();loadBacktest();}
 
 $("#refreshBtn").onclick=loadAll;
 $("#runBtn").onclick=async()=>{

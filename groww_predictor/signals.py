@@ -15,6 +15,36 @@ from __future__ import annotations
 import numpy as np
 
 
+def blend_with_indicators(lean_score: float, ind_score: float, adx: float = None) -> float:
+    """Combine the opening-momentum lean with the indicator vote.
+    ADX (trend strength) scales how much weight the directional view gets."""
+    trend = 0.5
+    if adx is not None and adx == adx:
+        trend = float(np.clip(adx / 50.0, 0.2, 1.0))   # strong trend → trust direction more
+    score = 0.6 * lean_score + 0.4 * (ind_score or 0)
+    return float(np.clip(score * trend, -1, 1))
+
+
+def trade_levels(last_price: float, atr: float, score: float,
+                 hist_range_pct: float = 0.02) -> dict:
+    """ATR-based target & stop with reward:risk. Falls back to the volatility
+    band if ATR is unavailable. Direction follows the (already blended) score."""
+    if not last_price or last_price <= 0:
+        return {"side": "NEUTRAL", "target": None, "stop": None, "rr": None}
+    side = "BUY" if score > 0.15 else ("SELL" if score < -0.15 else "NEUTRAL")
+    a = atr if (atr and atr == atr and atr > 0) else last_price * hist_range_pct * 0.6
+    tgt_mult, stop_mult = 1.5, 1.0          # reward 1.5x ATR, risk 1.0x ATR → R:R 1.5
+    if side == "BUY":
+        target, stop = last_price + tgt_mult * a, last_price - stop_mult * a
+    elif side == "SELL":
+        target, stop = last_price - tgt_mult * a, last_price + stop_mult * a
+    else:
+        return {"side": "NEUTRAL", "target": None, "stop": None, "rr": None}
+    reward, risk = abs(target - last_price), abs(last_price - stop)
+    return {"side": side, "target": round(float(target), 2), "stop": round(float(stop), 2),
+            "rr": round(float(reward / risk), 2) if risk else None}
+
+
 def directional_lean(gap_pct: float, open_ret: float, pos_in_range: float,
                      vol_z: float = 0.0) -> tuple[str, float, float]:
     """
